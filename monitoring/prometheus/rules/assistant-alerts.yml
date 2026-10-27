@@ -1,0 +1,19 @@
+groups:
+  - name: ai-devops-assistant
+    rules:
+      - alert: AssistantMetricsEndpointDown
+        expr: up{job="ai-devops-assistant"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: AI DevOps Assistant metrics endpoint is unavailable
+          description: Prometheus has failed to scrape the assistant metrics endpoint for more than two minutes.
+      - alert: AssistantWebHealthcheckFailing
+        expr: probe_success{job="ai-devops-assistant-health"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: AI DevOps Assistant web health check is failing
+          description: The Streamlit health endpoint has not returned HTTP 200 for more than two minutes.

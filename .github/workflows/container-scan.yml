@@ -1,0 +1,70 @@
+name: Container build and security scan
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+      - name: Build OCI image
+        run: podman build --pull=always -f Containerfile -t ai-devops-engineer-assistant:ci .
+      - name: Verify image metadata
+        run: |
+          podman image inspect ai-devops-engineer-assistant:ci
+          podman run --rm --entrypoint python ai-devops-engineer-assistant:ci -m compileall -q /app/config /app/src /app/deployment /app/streamlit_app.py
+      - name: Run container health smoke test
+        run: |
+          podman run -d --name assistant-smoke -p 127.0.0.1:18501:8501 \
+            -e COMMAND_EXECUTION_ENABLED=false \
+            -e PROMETHEUS_METRICS_ENABLED=true \
+            ai-devops-engineer-assistant:ci
+          cleanup() { podman logs assistant-smoke || true; podman rm -f assistant-smoke || true; }
+          trap cleanup EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18501/_stcore/health >/dev/null; then
+              echo "Streamlit health endpoint is ready"
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Container failed health check" >&2
+            exit 1
+          fi
+          metrics_ready=0
+          for attempt in $(seq 1 10); do
+            if podman exec assistant-smoke python -c "from urllib.request import urlopen; assert b'devops_assistant_up 1' in urlopen('http://127.0.0.1:8000/metrics', timeout=2).read()"; then
+              metrics_ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$metrics_ready" -ne 1 ]; then
+            echo "Prometheus metrics endpoint failed" >&2
+            exit 1
+          fi
+      - name: Save image for vulnerability scan
+        run: podman save --format docker-archive -o /tmp/assistant-image.tar ai-devops-engineer-assistant:ci
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.0
+      - name: Scan image for critical/high vulnerabilities
+        run: trivy image --input /tmp/assistant-image.tar --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed
+      - name: Scan deployment configuration
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH

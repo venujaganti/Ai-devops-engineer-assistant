@@ -1,0 +1,8 @@
+aws_region                = "ap-south-1"
+environment               = "dev"
+app_image                 = "ghcr.io/OWNER/REPOSITORY:latest"
+instance_type             = "t3.small"
+grafana_allowed_cidr      = "203.0.113.10/32" # Replace with your trusted public IP/CIDR, or leave empty.
+grafana_admin_password    = "replace-with-a-unique-password-at-least-16-chars"
+ssh_allowed_cidr          = "" # Prefer AWS Systems Manager Session Manager over SSH.
+gemini_secret_arn          = "" # Optional Secrets Manager ARN; SecretString should contain the Gemini API key.

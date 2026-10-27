@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-devops-engineer-assistant"
+version = "0.1.0"
+description = "A Gemini-powered AI assistant for DevOps engineers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+  "streamlit>=1.40,<2.0",
+  "google-genai>=1.0,<2.0",
+  "python-dotenv>=1.0,<2.0",
+  "PyYAML>=6.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "."]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F821", "F822", "F823"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/devops_ai", "config"]
+omit = ["*/__pycache__/*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 55
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

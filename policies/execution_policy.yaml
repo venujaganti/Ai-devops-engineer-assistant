@@ -1,0 +1,15 @@
+version: 1
+execution:
+  enabled_by_default: false
+  require_human_approval: true
+  allow_shell: false
+  allow_model_generated_commands: false
+  timeout_seconds: 30
+  max_output_bytes: 65536
+  network_access: false
+  writable_paths: []
+  deny_patterns:
+    - '(?i)\brm\s+-rf\b'
+    - '(?i)\bsudo\b'
+    - '(?i)\bcurl\b.*\|.*\bsh\b'
+    - '(?i)\b(terraform|kubectl|aws|az|gcloud)\b.*\b(delete|destroy|apply)\b'

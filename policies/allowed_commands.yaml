@@ -1,0 +1,9 @@
+version: 1
+# Read-only diagnostics only. Commands are never run from model output directly.
+allowed_commands:
+  - ["podman", "version"]
+  - ["kubectl", "version", "--client"]
+  - ["terraform", "version"]
+  - ["aws", "--version"]
+  - ["az", "version"]
+  - ["gcloud", "version"]

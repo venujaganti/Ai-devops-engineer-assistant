@@ -1,0 +1,58 @@
+name: Deploy AWS infrastructure
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, staging, production]
+        default: dev
+        required: true
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: aws-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: infrastructure/aws
+    env:
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_grafana_admin_password: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+      TF_VAR_gemini_secret_arn: ${{ vars.GEMINI_SECRET_ARN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Set lowercase container image URI
+        id: image
+        shell: bash
+        run: echo "uri=ghcr.io/${GITHUB_REPOSITORY,,}:latest" >> "$GITHUB_OUTPUT"
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Set deployment image
+        run: echo "TF_VAR_app_image=${{ steps.image.outputs.uri }}" >> "$GITHUB_ENV"
+      - name: Initialize Terraform with remote state
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=ai-devops-assistant/${{ inputs.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_STATE_LOCK_TABLE }}" \
+            -backend-config="encrypt=true"
+      - name: Validate Terraform
+        run: terraform validate
+      - name: Plan deployment
+        run: terraform plan -input=false -out=tfplan
+      - name: Apply reviewed deployment plan
+        run: terraform apply -input=false -auto-approve tfplan

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y podman awscli
+systemctl enable --now podman-restart.service || true
+podman network create ai-devops-net || true
+podman volume create ai-devops-prometheus-data || true
+podman volume create ai-devops-grafana-data || true
+mkdir -p /opt/ai-devops-assistant/prometheus/rules /opt/ai-devops-assistant/blackbox /opt/ai-devops-assistant/grafana/provisioning/datasources /opt/ai-devops-assistant/grafana/provisioning/dashboards /opt/ai-devops-assistant/grafana/dashboards
+cat > /opt/ai-devops-assistant/prometheus/prometheus.yml <<'PROM'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+rule_files:
+  - /etc/prometheus/rules/*.yml
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+  - job_name: ai-devops-assistant
+    static_configs:
+      - targets: ["ai-devops-assistant:8000"]
+  - job_name: ai-devops-assistant-health
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://ai-devops-assistant:8501/_stcore/health"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+PROM
+cat > /opt/ai-devops-assistant/grafana/provisioning/datasources/prometheus.yml <<'GRAFANA'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+GRAFANA
+cat > /opt/ai-devops-assistant/grafana/provisioning/dashboards/dashboards.yml <<'GRAFANA_DASHBOARDS'
+apiVersion: 1
+providers:
+  - name: AI DevOps Assistant
+    orgId: 1
+    folder: AI DevOps Assistant
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards
+GRAFANA_DASHBOARDS
+printf '%s' '${grafana_dashboard_b64}' | base64 -d > /opt/ai-devops-assistant/grafana/dashboards/assistant-overview.json
+printf '%s' '${prometheus_rules_b64}' | base64 -d > /opt/ai-devops-assistant/prometheus/rules/assistant-alerts.yml
+printf '%s' '${blackbox_config_b64}' | base64 -d > /opt/ai-devops-assistant/blackbox/blackbox.yml
+chmod 0644 /opt/ai-devops-assistant/prometheus/prometheus.yml /opt/ai-devops-assistant/grafana/provisioning/datasources/prometheus.yml /opt/ai-devops-assistant/grafana/provisioning/dashboards/dashboards.yml /opt/ai-devops-assistant/grafana/dashboards/assistant-overview.json /opt/ai-devops-assistant/prometheus/rules/assistant-alerts.yml /opt/ai-devops-assistant/blackbox/blackbox.yml
+GEMINI_API_KEY=""
+if [ -n '${gemini_secret_arn}' ]; then
+  GEMINI_API_KEY="$(aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${gemini_secret_arn}' --query SecretString --output text)"
+fi
+podman pull '${app_image}'
+podman run -d --replace --name ai-devops-assistant --network ai-devops-net --restart=always \
+  -p 8501:8501 -e APP_ENV=production -e COMMAND_EXECUTION_ENABLED=false \
+  -e REQUIRE_COMMAND_APPROVAL=true -e PROMETHEUS_METRICS_ENABLED=true \
+  -e "GEMINI_API_KEY=$GEMINI_API_KEY" \
+  -e PROMETHEUS_METRICS_PORT=8000 '${app_image}'
+podman run -d --replace --name blackbox-exporter --network ai-devops-net --restart=always \
+  -v /opt/ai-devops-assistant/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro \
+  docker.io/prom/blackbox-exporter:v0.25.0 --config.file=/etc/blackbox_exporter/config.yml
+podman run -d --replace --name prometheus --network ai-devops-net --restart=always \
+  -p 127.0.0.1:9090:9090 \
+  -v /opt/ai-devops-assistant/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+  -v /opt/ai-devops-assistant/prometheus/rules:/etc/prometheus/rules:ro \
+  -v ai-devops-prometheus-data:/prometheus \
+  docker.io/prom/prometheus:v2.54.1 \
+  --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus \
+  --storage.tsdb.retention.time=7d
+GRAFANA_PASSWORD="$(printf '%s' '${grafana_admin_password_b64}' | base64 -d)"
+podman run -d --replace --name grafana --network ai-devops-net --restart=always \
+  -p 3000:3000 -e GF_SECURITY_ADMIN_USER=admin \
+  -e "GF_SECURITY_ADMIN_PASSWORD=$GRAFANA_PASSWORD" \
+  -e GF_USERS_ALLOW_SIGN_UP=false -e GF_ANALYTICS_REPORTING_ENABLED=false \
+  -v ai-devops-grafana-data:/var/lib/grafana \
+  -v /opt/ai-devops-assistant/grafana/provisioning:/etc/grafana/provisioning:ro \
+  -v /opt/ai-devops-assistant/grafana/dashboards:/var/lib/grafana/dashboards:ro \
+  docker.io/grafana/grafana:11.2.0
+unset GRAFANA_PASSWORD GEMINI_API_KEY
